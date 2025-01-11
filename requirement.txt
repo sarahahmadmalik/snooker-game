@@ -1,0 +1,1478 @@
+// arena.js
+
+/**
+ * Function to initialize the snooker game world.
+ * This function calls multiple setup functions to initialize all the components of the game.
+ * 
+ * It performs the following:
+ * 1. Calculates the table size.
+ * 2. Sets up the table.
+ * 3. Sets up the pockets.
+ * 4. Sets up the pool balls.
+ * 5. Sets up the cue ball.
+ * 6. Sets up the colored balls.
+ */
+function setupSnookerWorld() {
+    calculateTablesize();        // Calculate the size of the snooker table
+    setupTable();                // Setup the table (layout and appearance)
+    setupPocket();               // Setup the pockets on the table
+    setupPoolBalls();            // Setup the pool balls
+    setupCueBall();              // Setup the cue ball
+    setupColoredBalls();         // Setup the colored balls
+}
+
+/**
+ * Function to draw the snooker world on the screen.
+ * This function is called every frame to continuously update the game world.
+ * 
+ * It performs the following:
+ * 1. Clears the screen with a black background.
+ * 2. Updates the physics engine (using `Engine.update()`).
+ * 3. Draws the table, cue ball, pool balls, and colored balls.
+ * 4. Draws the HUD (scoreboard, instructions, etc.).
+ * 5. Draws the energy bar (for shot force).
+ * 6. Checks for collisions between balls and updates the game state.
+ * 7. Optionally displays rules, menu, cue stick, and shot indicators based on user actions.
+ * 8. Displays the ball order if no pool balls are remaining.
+ * 9. Ends the game if all pool and colored balls are potted.
+ */
+function drawSnookerWorld() {
+    background(0, 0, 0);  // Set the background to black
+    Engine.update(engine); // Update the physics engine (Matter.js)
+
+    // Draw the game elements
+    drawTable();           // Draw the snooker table
+    drawCueBall();         // Draw the cue ball
+    drawPoolBalls();       // Draw the pool balls
+    drawColoredBalls();    // Draw the colored balls
+    drawHUD();             // Draw the heads-up display (score, instructions, etc.)
+    drawEnergyBar();       // Draw the energy bar (force applied to the shot)
+    collisionDetection();  // Check for collisions between cue ball and other objects
+
+    // Show free ball setup if applicable
+    if (cueBallSetupMode) drawFreeBall(); 
+
+    // Optionally show the rules or menu images
+    if (drawRules) image(rules, tableWidth / 2 + 50, 20, 500, 500);
+    if (drawMenu) background(menu);
+
+    // Show shot indicators when mouse is pressed
+    if (mouseIsPressed) {
+        drawCueStick();      // Draw the cue stick
+        drawShotIndicator(); // Draw the shot indicator line
+    }
+    
+    // Show ball order if no pool balls remain
+    if (poolBalls.length == 0) drawBallOrder();
+
+    // End the game if all pool and colored balls are potted
+    if (poolBalls.length == 0 && colorballs.length == 0) {
+        gameOver();  // Display the game over message
+    }
+}
+
+
+//ball.js
+
+// Array to store all the pool balls on the table
+var poolBalls = []; // Holds the objects representing the pool balls (excluding the cue ball)
+
+// Array to store all the colored balls on the table
+var colorballs = []; // Holds the objects representing the colored balls
+
+// Array to store the order in which balls are to be potted (usually based on rules)
+var colorOrder = []; // Defines the sequence of balls to be potted in the game (e.g., stripes vs. solids in pool)
+
+// Array to store consecutive balls that are part of a sequence
+var consecutiveBalls = []; // Keeps track of balls that must be potted consecutively (if applicable)
+
+// Represents the cue ball in the game
+var cueBall; // Object representing the cue ball
+
+// Represents the shot indicator that is drawn when the player aims with the cue stick
+var shotIndicator; // Visual indicator (usually a line) that shows the direction of the shot
+
+// Variable to store the player's score
+var score = 0; // Keeps track of the player's score during the game
+
+// Represents the applied force for the shot (intensity and direction)
+var appliedForce; // The force applied to the cue ball when the player makes a shot
+
+// Holds the previous velocity of the cue ball for tracking its movement and behavior
+var cueBallPrevVelocity = { x: 0, y: 0 }; // Stores the cue ball's previous velocity (x and y components)
+
+// Flag indicating whether the cue ball is at rest or still moving
+var cueBallRest = false; // Boolean flag indicating whether the cue ball has stopped moving or not
+
+// Flag indicating whether the cue ball has been drawn on the table
+var cueBallDrawn = false; // Boolean flag indicating whether the cue ball has been placed on the table
+
+// Index of the next colored ball that will be aimed at
+var nextColoredBallIndex = 0; // Keeps track of which colored ball is next in the sequence to be potted
+
+/**
+ * Function to draw the "free ball" during cue ball setup mode.
+ * This function is responsible for rendering a free ball at the mouse position, which can be moved
+ * within specific bounds on the table when the cue ball is being set up.
+ * 
+ * It performs the following:
+ * 1. Draws a white ball (the free ball) at the mouse's position, constrained to a specific area
+ *    when `cueBallDrawn` is false.
+ * 2. If the cue ball has been drawn (`cueBallDrawn` is true), the free ball follows the mouse position directly.
+ */
+function drawFreeBall() {
+    push();
+    fill(255);  // Set the color to white for the free ball
+
+    // If the cue ball has not been drawn yet, constrain the mouse position to certain bounds
+    if (!cueBallDrawn) {
+        var conMouseX = constrain(mouseX, width / 2 - tableWidth / 3, width / 2 - tableWidth / 4);  // Constrain mouseX within a range
+        var conMouseY = constrain(mouseY, height / 2 - tableHeight / 5, height / 2 + tableHeight / 5);  // Constrain mouseY within a range
+        ellipse(conMouseX, conMouseY, ballDiameter);  // Draw the free ball at the constrained position
+    } else {
+        // If the cue ball has been drawn, the free ball follows the mouse position directly
+        ellipse(mouseX, mouseY, ballDiameter);  // Draw the free ball directly at the mouse position
+    }
+    pop();
+}
+
+/**
+ * Sets up the cue ball on the table at the specified position.
+ * This function creates a circular body for the cue ball using the Matter.js physics engine,
+ * with properties like restitution, friction, and density defined for realistic ball behavior.
+ * The cue ball is added to the world to participate in the simulation.
+ * 
+ * @param {number} x - The x-coordinate of the cue ball's starting position.
+ * @param {number} y - The y-coordinate of the cue ball's starting position.
+ */
+function setupCueBall(x, y) {
+    // Create a circular body for the cue ball with specified properties
+    cueBall = Bodies.circle(x, y, ballDiameter / 2, { 
+        restitution: 0.8, // Bounciness of the cue ball
+        friction: 0.5, // Friction applied to the cue ball
+        density: 0.01, // Density affecting the ball's mass
+        sleepThreshold: 30 // Threshold for the ball to go to sleep when not moving
+    });
+
+    // Add the cue ball to the Matter.js engine's world
+    World.add(engine.world, [cueBall]);
+}
+
+/**
+ * Draws the cue ball on the screen.
+ * This function renders the cue ball based on its current position and handles specific 
+ * behaviors like resetting its position if it moves too far or checking if it's at rest.
+ * It also draws the vertices of the cue ball's physics body using the `drawVertices()` function.
+ */
+function drawCueBall() {
+    push();  // Begin a new drawing state
+
+    fill(255);  // Set the color to white (for the cue ball)
+
+    // If the cue ball has not been drawn yet, draw its vertices
+    if (!cueBallDrawn) {
+        drawVertices(cueBall.vertices);  // Draw the cue ball using its vertices (from Matter.js)
+    }
+
+    // Check if the cue ball needs to be reset (e.g., if it's out of bounds)
+    if (checkDistance(cueBall)) {
+        resetCueBall();  // Reset the cue ball to its starting position
+    }
+
+    // Check if the cue ball is at rest (not moving)
+    checkCueballAtRest();
+
+    pop();  // End the drawing state
+}
+
+/**
+ * Creates a pattern of balls in a triangular arrangement, typically used for setting up the balls in games like pool or snooker.
+ * The function generates a list of `p5.Vector` positions representing the balls' locations.
+ * 
+ * @param {number} rows - The number of rows in the pattern. The number of balls increases with each row.
+ * @param {number} x - The x-coordinate of the top-center ball's position.
+ * @param {number} y - The y-coordinate of the top-center ball's position.
+ * @param {number} r - The radius of each ball, used to calculate the distance between balls.
+ * @returns {Array} An array of `p5.Vector` objects, each representing the position of a ball.
+ */
+function makePattern(rows, x, y, r) {
+    let columns = 1; // The number of balls in the current row, starts with 1 and increases for each row.
+    const ballsPattern = []; // Array to store the positions of all the balls.
+
+    // Loop through the number of rows to create each row of balls
+    for (let i = 0; i < rows; i++) {
+        // Create the balls for the current row
+        const ballsRow = Array(columns).fill().map((_, colIndex) => 
+            createVector(x + (columns - 1) * r * 2, y + (colIndex - columns / 2) * r * 2 + r)
+        );
+
+        // Add the balls of the current row to the pattern array
+        ballsPattern.push(...ballsRow);
+
+        // Increase the number of balls in the next row
+        columns++;
+    }
+
+    return ballsPattern; // Return the array of ball positions
+}
+
+
+/**
+ * Sets up the pool balls on the table in a triangular pattern.
+ * This function uses the `makePattern` function to create a pattern of pool balls and then
+ * initializes each pool ball with the specified properties and colors.
+ * 
+ * @returns {void}
+ */
+function setupPoolBalls() {
+    // The number of rows in the ball pattern
+    const ballPatternRows = 5; 
+    // The x-coordinate for the starting position of the first ball in the pattern
+    const ballPatternX = width / 4 + tableWidth / 1.38; 
+    // The y-coordinate for the starting position of the first ball in the pattern
+    const ballPatternY = height / 2; 
+    // The radius of each ball
+    const ballPatternRadius = ballDiameter / 2; 
+    
+    // Create the pool balls pattern using the makePattern function
+    const poolBallsPattern = makePattern(ballPatternRows, ballPatternX, ballPatternY, ballPatternRadius);
+    
+    // Map the pool balls pattern into PoolBall objects, assigning properties such as color and physics properties
+    poolBalls = poolBallsPattern.map(({ x, y }) => 
+        new PoolBall(x, y, { restitution: 0.8, friction: 0.5 }, "#FF0000")
+    );
+}
+
+/**
+ * Creates a PoolBall object that represents a ball on the table.
+ * The PoolBall object has a `body` property that is a Matter.js physics object,
+ * and includes methods for resetting the ball's position and velocity.
+ * 
+ * @param {number} x - The x-coordinate for the ball's initial position.
+ * @param {number} y - The y-coordinate for the ball's initial position.
+ * @param {Object} options - Physics properties like restitution, friction, and density.
+ * @param {string} color - The color of the pool ball.
+ */
+function PoolBall(x, y, options, color) {
+    // Store the original position of the ball so it can be reset later
+    this.originalX = x;
+    this.originalY = y;
+    
+    // The color of the pool ball
+    this.color = color;
+
+    // Method to reset the ball's position and velocity
+    this.reset = function() {
+        Body.setVelocity(this.body, { x: 0, y: 0 });  // Set velocity to zero
+        Body.setPosition(this.body, { x: this.originalX, y: this.originalY });  // Reset position to original position
+    }
+
+    // Create the ball's body using Matter.js and assign it the given physics properties (restitution, friction, etc.)
+    this.body = Bodies.circle(x, y, ballDiameter / 2, options);
+    
+    // Add the ball's body to the world
+    World.add(engine.world, this.body);
+}
+
+
+/**
+ * Draws all the pool balls on the table.
+ * The function iterates through each ball in the `poolBalls` array, fills it with the appropriate color, 
+ * and draws its vertices using the `drawVertices` function. It also checks if any ball should be removed 
+ * from the world based on the distance and manages the consecutive balls.
+ * 
+ * @returns {void}
+ */
+function drawPoolBalls() {
+    push();
+    
+    // Loop through each pool ball and draw its color and shape
+    for (var i = 0; i < poolBalls.length; i++) {
+        // Set the fill color of the pool ball
+        fill(poolBalls[i].color);
+        
+        // Draw the ball's vertices (shape) using the drawVertices function
+        drawVertices(poolBalls[i].body.vertices);
+    }
+
+    // Iterate over pool balls to check for balls that are at rest or removed
+    for (var ball of poolBalls) {
+        // Check if the distance condition is met for removing the ball
+        if (checkDistance(ball.body)) {
+            // Add the ball to the consecutive balls array
+            consecutiveBalls.push(ball);
+            
+            // Remove the ball from the world (i.e., stop it from being rendered/affected by physics)
+            removeFromWorld(ball);
+            
+            // Check the consecutive balls to possibly end the game or update score
+            checkConsecutiveBalls();
+        }
+    }
+    
+    pop();
+}
+
+/**
+ * Constructor for creating colored ball objects.
+ * 
+ * @param {number} x - The x-coordinate of the ball's position on the table.
+ * @param {number} y - The y-coordinate of the ball's position on the table.
+ * @param {number} size - The size (radius) of the ball.
+ * @param {Object} options - The physical properties of the ball (Matter.js body options).
+ * @param {string} color - The color of the ball (in hexadecimal or color name).
+ */
+function coloredBalls(x, y, size, options, color) {
+    // Create a Matter.js circle body for the ball
+    this.body = Bodies.circle(x, y, size, options);
+    
+    // Assign color to the ball
+    this.color = color;
+
+    // Store the initial position to reset the ball later if needed
+    this.originalX = x;
+    this.originalY = y;
+
+    // Add the ball to the world
+    World.add(engine.world, this.body);
+}
+
+/**
+ * Setup the colored balls on the table.
+ * This function creates several colored balls with specific properties (like restitution, friction, and color),
+ * and adds them to the `colorballs` array. It also maintains the color order of the balls.
+ * 
+ * @returns {void}
+ */
+function setupColoredBalls() {
+    // Define the physical properties for the balls
+    var options = { restitution: 0.8, friction: 0.5 };
+
+    // Create individual colored balls with specific positions, sizes, and colors
+    var greenball = new coloredBalls(width / 2 - tableWidth / 4, height / 2 - 50, ballDiameter / 2, options, "#00FF00");
+    var brownball = new coloredBalls(width / 2 - tableWidth / 4, height / 2, ballDiameter / 2, options, "#8B4513");
+    var yellowball = new coloredBalls(width / 2 - tableWidth / 4, height / 2 + 50, ballDiameter / 2, options, "#FFFF00");
+    var blueball = new coloredBalls(width / 2, height / 2, ballDiameter / 2, options, "#0000FF");
+    var pinkball = new coloredBalls(width / 2 + tableWidth / 5, height / 2, ballDiameter / 2, options, "#FFC0CB");
+    var blackball = new coloredBalls(width / 2 + tableWidth / 2.5, height / 2, ballDiameter / 2, options, "#000000");
+
+    // Add the colored balls to the colorballs array
+    colorballs.push(greenball, brownball, yellowball, blueball, pinkball, blackball);
+
+    // Create an array of colors in the same order as the colorballs array
+    colorOrder = colorballs.map(ball => ball.color);
+}
+
+/**
+ * Draws and updates the colored balls on the table.
+ * 
+ * This function iterates over each ball in the `colorballs` array, checks for interactions with the pockets, 
+ * and updates the game state accordingly. When a ball is pocketed, it is removed from the world, and its 
+ * color value is added to the score. Additionally, it handles the behavior of consecutive balls, such as 
+ * checking which colored ball should be pocketed next and managing the game flow.
+ * 
+ * @returns {void}
+ */
+function drawColoredBalls() {
+    // Iterate through all colored balls
+    for (var ball of colorballs) {
+        // Set the fill color based on the ball's color
+        fill(ball.color);
+
+        // Draw the ball's vertices (geometry)
+        drawVertices(ball.body.vertices);
+        
+        // Check if the ball has been pocketed
+        if (checkDistance(ball.body)) {
+            // If pool balls are pocketed, check if the current ball is the next to be pocketed
+            if (poolBalls.length === 0 && ball.color === colorOrder[nextColoredBallIndex]) {
+                removeFromWorld(ball); // Remove the ball from the world when pocketed
+                if (coloredBalls.length != 0) nextColoredBallIndex++; // Move to the next colored ball
+                addColorBallValue(ball.color); // Add the color's value to the score
+            } else {
+                // If the ball is not pocketed correctly, reset it to its original position
+                resetPocketedBall(ball);
+                consecutiveBalls.push(ball); // Add the ball to the consecutive balls array
+                checkConsecutiveBalls(); // Check and update the consecutive balls
+            }
+        }
+    }
+}
+
+/**
+ * Resets the cue ball position and stops its movement when needed.
+ * 
+ * This function resets the cue ball's velocity to zero and allows the player to reposition the ball.
+ * If the mouse is pressed, the cue ball is moved to the mouse's position, allowing the player to 
+ * freely place it before taking the next shot.
+ * 
+ * @returns {void}
+ */
+function resetCueBall() {
+    // Set the cue ball's velocity to zero
+    Body.setVelocity(cueBall, { x: 0, y: 0 });
+    
+    // Mark that the cue ball has been drawn
+    cueBallDrawn = true;
+    
+    // Draw the free ball (allowing the player to place the cue ball)
+    drawFreeBall();
+    
+    // If the mouse is pressed, set the cue ball's position to the mouse's location
+    if (mouseIsPressed) {
+        cueBallDrawn = false;
+        Body.setPosition(cueBall, { x: mouseX, y: mouseY }); 
+    }
+}
+
+/**
+ * Resets all pool balls to their original positions and stops their movement.
+ * 
+ * This function iterates over all pool balls in the `poolBalls` array and calls the `reset()` method 
+ * for each ball. This effectively resets their positions and stops their velocity, bringing them 
+ * back to the starting position.
+ * 
+ * @returns {void}
+ */
+function resetPoolBalls() {
+    // Iterate over each pool ball and reset its state
+    for (var ball of poolBalls) {
+        ball.reset(); // Reset ball position and velocity
+    }
+}
+
+/**
+ * Resets all colored balls to their original positions and stops their movement.
+ * 
+ * This function iterates over all colored balls in the `colorballs` array and resets their 
+ * positions to their original positions by setting their velocity to zero.
+ * 
+ * @returns {void}
+ */
+function resetColorballs(ball) {
+    // Iterate over each colored ball and reset its state
+    for (var ball of colorballs) {
+        // Reset velocity and position of the ball
+        Body.setVelocity(ball.body, { x: 0, y: 0 });
+        Body.setPosition(ball.body, { x: ball.originalX, y: ball.originalY });
+    }
+}
+
+/**
+ * Resets the position and stops the movement of a specific pocketed ball.
+ * 
+ * This function resets the velocity and position of a ball that has been pocketed, 
+ * returning it to its original position on the table.
+ * 
+ * @param {Object} ball - The ball to be reset (either from pool balls or colored balls).
+ * @returns {void}
+ */
+function resetPocketedBall(ball) {
+    // Reset the velocity and position of the specific pocketed ball
+    Body.setVelocity(ball.body, { x: 0, y: 0 });
+    Body.setPosition(ball.body, { x: ball.originalX, y: ball.originalY });
+}
+
+/**
+ * Checks whether a given ball has entered a pocket by comparing its distance to the pockets.
+ * 
+ * This function calculates the distance between the ball's position and each pocket's position. 
+ * If the ball is within a certain distance (19 pixels), it is considered pocketed.
+ * The function handles two game states: the standard `gameState` and the `ovalgameState`, 
+ * where the latter uses a different set of pockets (ovalHoles).
+ * 
+ * @param {Object} ball - The ball to check for pocketing. The ball object must have a `position` property.
+ * @returns {boolean} - `true` if the ball is pocketed (i.e., its distance from any hole is less than 19), 
+ *                      otherwise `false`.
+ */
+function checkDistance(ball) {
+    // If the game state is in the standard mode
+    if(gameState) {
+        var pos = ball.position; // Get the ball's position
+
+        // Iterate through all holes in the table (standard pockets)
+        for (var i = 0; i < holes.length; i++) {
+            var hole = holes[i]; // Get each hole's position
+            // Calculate the distance between the ball and the hole
+            var distance = Matter.Vector.magnitude({
+                x: pos.x - hole.x,
+                y: pos.y - hole.y
+            });
+
+            // If the distance is less than 19, the ball is considered pocketed
+            if (distance < 19) {
+                return true;
+            }
+        }
+        return false; // Return false if the ball is not pocketed
+    } 
+    // If the game state is in oval mode
+    else if(ovalgameState) {
+        var pos = ball.position; // Get the ball's position
+
+        // Iterate through all holes in the oval game (oval-shaped pockets)
+        for (var i = 0; i < ovalHoles.length; i++) {
+            var hole = ovalHoles[i]; // Get each oval hole's position
+            // Calculate the distance between the ball and the hole
+            var distance = Matter.Vector.magnitude({
+                x: pos.x - hole.x,
+                y: pos.y - hole.y
+            });
+
+            // If the distance is less than 19, the ball is considered pocketed
+            if (distance < 19) {
+                return true;
+            }
+        }
+        return false; // Return false if the ball is not pocketed
+    }
+}
+
+/**
+ * Removes a ball from the world and updates relevant arrays and the score.
+ * 
+ * This function removes the given ball from the physics world (engine.world), 
+ * removes the ball from the `poolBalls` and `colorballs` arrays if present, 
+ * and increments the score.
+ * 
+ * @param {Object} ball - The ball to remove. The ball object must have a `body` property to be removed from the world.
+ */
+function removeFromWorld(ball) {
+    // Remove the ball from the physics world
+    World.remove(engine.world, ball.body);
+
+    // Remove the ball from the poolBalls array if it exists
+    var index = poolBalls.indexOf(ball);
+    if (index !== -1) {
+        poolBalls.splice(index, 1); // Remove the ball from the array
+        score++; // Increment the score
+    }
+
+    // Remove the ball from the colorballs array if it exists
+    var index2 = colorballs.indexOf(ball);
+    if (index2 !== -1) {
+        colorballs.splice(index2, 1); // Remove the ball from the array
+    }
+}
+/**
+ * Randomizes the position of each pool ball within a defined area on the table.
+ * 
+ * This function iterates over all the balls in the `poolBalls` array and assigns them
+ * a new random position within a specified rectangular area defined by the table’s width and height.
+ * The random positions ensure that each pool ball is placed in a different spot on the table within the defined bounds.
+ */
+function randomisePoolballs() {
+    // Defining the minimum and maximum X and Y coordinates for the random placement
+    const minX = width / 2 - tableWidth / 2.5;
+    const minY = height / 2 - tableHeight / 2.5;
+    const maxX = width / 2 + tableWidth / 2.5;
+    const maxY = height / 2 + tableHeight / 2.5;
+
+    // Iterate over each pool ball and set a random position within the specified bounds
+    for (var ball of poolBalls) {
+        // Generate random X and Y coordinates within the defined range
+        const randomX = random(minX, maxX);
+        const randomY = random(minY, maxY);
+
+        // Set the ball’s new position
+        Body.setPosition(ball.body, { x: randomX, y: randomY });
+    }
+}
+
+/**
+ * Randomizes the position of each colored ball within a defined area on the table.
+ * 
+ * This function iterates over all the balls in the `colorballs` array and assigns them
+ * a new random position within a specified rectangular area defined by the table’s width and height.
+ * The random positions ensure that each colored ball is placed in a different spot on the table within the defined bounds.
+ */
+function randomiseColoredBalls() {
+    // Defining the minimum and maximum X and Y coordinates for the random placement
+    const minX = width / 2 - tableWidth / 2.5;
+    const minY = height / 2 - tableHeight / 2.5;
+    const maxX = width / 2 + tableWidth / 2.5;
+    const maxY = height / 2 + tableHeight / 2.5;
+
+    // Iterate over each colored ball and set a random position within the specified bounds
+    for (var ball of colorballs) {
+        // Generate random X and Y coordinates within the defined range
+        const randomX = random(minX, maxX);
+        const randomY = random(minY, maxY);
+
+        // Set the ball’s new position
+        Body.setPosition(ball.body, { x: randomX, y: randomY });
+    }
+}
+
+/**
+ * Checks whether the cue ball has come to rest (i.e., its velocity is below a certain threshold).
+ * 
+ * This function monitors the cue ball's velocity to determine if it has stopped moving. 
+ * If the velocity is below a threshold value, it updates a global variable `cueBallRest` to `true`
+ * and displays a "Click to Play" message. If the velocity is above the threshold, it sets `cueBallRest` to `false`.
+ */
+function checkCueballAtRest() {
+    // Get the current velocity of the cue ball
+    const velocity = cueBall.velocity;
+
+    // Set a threshold for the velocity to determine if the ball has stopped
+    const threshold = 0.1; 
+
+    // Check if the velocity is below the threshold for both x and y components
+    if (abs(velocity.x) < threshold && abs(velocity.y) < threshold) {
+        stroke("red");
+        textSize(24);
+        // Display "Click to Play" message when the ball is at rest
+        text("Click to Play", width / 2 - 45, height - 50);
+        cueBallRest = true; // Cue ball is at rest
+    } else {
+        cueBallRest = false; // Cue ball is still moving
+    }
+
+    // Store the current velocity for comparison in the next call
+    cueBallPrevVelocity = { x: velocity.x, y: velocity.y };
+}
+
+/**
+ * Constrains a value to be within a specified range.
+ * 
+ * This function ensures that a given value stays within a defined minimum and maximum range.
+ * If the value is below the minimum, it returns the minimum. If the value is above the maximum, it returns the maximum.
+ * Otherwise, it returns the value itself.
+ * 
+ * @param {number} value - The value to be constrained.
+ * @param {number} min - The minimum value allowed.
+ * @param {number} max - The maximum value allowed.
+ * @returns {number} - The constrained value within the range [min, max].
+ */
+function constrain(value, min, max) {
+    // Return the value constrained between min and max
+    return Math.min(Math.max(value, min), max);
+}
+
+
+/**
+ * Draws the next ball's color and displays the label "Next Ball" on the game table.
+ * 
+ * This function visually indicates which colored ball is the next one in the game. It shows the label "Next Ball" 
+ * and a circle representing the color of the next ball to be played, based on the `colorOrder` array and the 
+ * `nextColoredBallIndex` variable.
+ */
+function drawBallOrder() {
+    push(); // Start a new drawing state
+
+    // Set the fill color to the next ball's color in the color order
+    fill(colorOrder[nextColoredBallIndex]);
+
+    // Set text size for the "Next Ball" label
+    textSize(20);
+
+    // Draw the label and the colored circle representing the next ball
+    text("Next Ball: ", width / 2 + tableWidth / 4, 75);
+    ellipse(width / 2 + tableWidth / 2.4, 68, ballDiameter, ballDiameter);
+
+    pop(); // Restore the previous drawing state
+}
+
+/**
+ * Checks if two consecutive balls have been pocketed and applies scoring penalties.
+ * 
+ * This function evaluates the `consecutiveBalls` array to see if there are consecutive balls of the same color
+ * or two red balls in a row. If there are two color balls (not red) in a row or two red balls in a row, it applies 
+ * a penalty and removes those balls from the `consecutiveBalls` array.
+ * 
+ * Penalties:
+ * - If two color balls (other than red) are consecutive, the player loses 1 point.
+ * - If two red balls are consecutive, the player loses 2 points.
+ */
+function checkConsecutiveBalls() {
+    // Loop through the consecutive balls to check for rule violations
+    for (let i = 0; i < consecutiveBalls.length - 1; i++) {
+        const currentBall = consecutiveBalls[i]; // The current ball in the sequence
+        const nextBall = consecutiveBalls[i + 1]; // The next ball in the sequence
+
+        if (poolBalls.length != 0) {
+            // Check for two non-red balls in a row
+            if (currentBall.color != "#FF0000" && nextBall.color != "#FF0000") {
+                alert("Two color balls in a row and minus point");
+                console.log("Consecutive balls with colors:", currentBall.color, "and", nextBall.color);
+
+                // Remove both balls from consecutive balls and apply penalty
+                consecutiveBalls.splice(i, 2);
+                i--; // Adjust the index after removal
+                score -= 1; // Apply penalty of -1 point
+            } 
+            // Check for two red balls in a row
+            else if (currentBall.color == "#FF0000" && nextBall.color == "#FF0000") {
+                alert("Two red balls in a row and minus point");
+                
+                // Remove both red balls from consecutive balls and apply penalty
+                consecutiveBalls.splice(i, 2);
+                i--; // Adjust the index after removal
+                score -= 2; // Apply penalty of -2 points
+            }
+        }
+    }
+}
+
+/**
+ * Adds score based on the color of the ball pocketed.
+ * 
+ * This function takes in the color of a pocketed ball and adds an appropriate amount of points to the player's score 
+ * based on the color. The color is represented by its hexadecimal value.
+ * 
+ * Scoring:
+ * - Green ball (#00FF00) = +2 points
+ * - Brown ball (#8B4513) = +3 points
+ * - Yellow ball (#FFFF00) = +4 points
+ * - Blue ball (#0000FF) = +5 points
+ * - Pink ball (#FFC0CB) = +6 points
+ * - Black ball (#000000) = +7 points
+ * 
+ * @param {string} color - The color of the pocketed ball in hexadecimal format.
+ */
+function addColorBallValue(color) {
+    switch (color) {
+        case "#00FF00": // Green ball
+            score += 2;
+            break;
+        case "#8B4513": // Brown ball
+            score += 3;
+            break;
+        case "#FFFF00": // Yellow ball
+            score += 4;
+            break;
+        case "#0000FF": // Blue ball
+            score += 5;
+            break;
+        case "#FFC0CB": // Pink ball
+            score += 6;
+            break;
+        case "#000000": // Black ball
+            score += 7;
+            break;
+    }
+}
+
+
+function mouseDragged(){}
+
+
+//dynamics.js
+/**
+ * Variables for energy bar:
+ * maxForceMagnitude (number): The maximum possible force applied to the cue ball.
+ * energyBarHeight (number): The height of the energy bar representing the force magnitude.
+ */
+var maxForceMagnitude = 500;  // Maximum force magnitude that can be applied
+var energyBarHeight = 250;    // Height of the energy bar (used for scaling the force magnitude)
+
+/**
+ * Draws the energy bar on the screen, which represents the force magnitude 
+ * applied to the cue ball based on the mouse's position.
+ * The bar shows an increasing color intensity as the energy increases.
+ */
+function drawEnergyBar() {
+    push();
+
+    // Calculate the force magnitude as the distance between the cue ball and mouse position
+    var forceMagnitude = Math.sqrt((cueBall.position.x - mouseX) ** 2 + (cueBall.position.y - mouseY) ** 2);
+
+    // Calculate the energy percentage based on the force magnitude
+    var energyPercentage = forceMagnitude / maxForceMagnitude;
+
+    // Draw the background of the energy bar
+    fill(50);  // Set background color to dark gray
+    rect(width / 2 + 430, height / 2 - 120, 20, energyBarHeight);  // Draw the bar
+
+    // If the mouse is pressed and dragged, update the energy bar
+    if (mouseIsPressed && mouseDragged) {
+        fill("#FF4500");  // Set the fill color to orange for the active energy bar
+        energyPercentage = constrain(energyPercentage, 0, 1);  // Constrain the energy percentage to 0-1
+
+        // Draw the updated energy bar based on the energy percentage
+        rect(width / 2 + 430, height / 2 - 120 + (1 - energyPercentage) * energyBarHeight, 20, energyBarHeight * energyPercentage);
+    }
+
+    pop();
+}
+
+
+/**
+ * Function to draw the HUD (Heads-Up Display) elements on the screen,
+ * including the score, menu instructions, and mode change instructions.
+ */
+function drawHUD() {
+    push();
+  
+    // Draw the background rectangle for the score display
+    fill(225, 0, 205, 50);  
+    rectMode(CENTER);       
+    rect(width / 2, height / 2 - tableHeight / 1.3, 600, 50); 
+  
+    textAlign(LEFT, CENTER); 
+    textSize(18);            
+    fill(255);               
+    text("Score: " + score, width / 2 - tableWidth / 2.2, height / 2 - 220); 
+  
+    textAlign(RIGHT, CENTER); 
+    textSize(16);             
+    text("Press 5 for menu", width / 2 + tableWidth / 2.2, height / 2 - 220);  
+  
+    // Instructions Text with background
+    textSize(12);           
+    fill(255);                
+    textAlign(LEFT, LEFT);    
+  
+    // Calculate the width of the rectangle based on the longest text line
+    const textWidth1 = textWidth("Press to change game mode:");
+    const textWidth2 = textWidth("1. Normal Snooker Game");
+    const textWidth3 = textWidth("2. Red Balls are random");
+    const textWidth4 = textWidth("3. Every ball is random");
+  
+    // Determine the width of the rectangle based on the longest line of text + padding
+    const rectWidth = max(textWidth1, textWidth2, textWidth3, textWidth4) + 60;
+  
+    fill('#C5796D');  
+    stroke(255);     
+    strokeWeight(2);  
+    rect(width / 3, height - 70, rectWidth, 100);  // Draw the instructions rectangle
+  
+    noStroke(); 
+    fill(255);   
+    text("Press to change game mode:", width / 4, height - 100); 
+    text("1. Normal Snooker Game", width / 4, height - 70);       
+    text("2. Red Balls are random", width / 4, height - 50);        
+    text("3. Every ball is random", width / 4, height - 30);       
+  
+    pop();
+  }
+  
+
+/**
+ * Resets the pool balls and color balls to their initial positions for the normal snooker game mode.
+ */
+function modeOne() {
+    resetPoolBalls();     // Resets the pool balls to their initial positions.
+    resetColorballs();    // Resets the color balls to their initial positions.
+}
+
+/**
+ * Randomizes the positions of the colored balls and pool balls for the game.
+ * This mode alters the initial setup of the game to create a different challenge.
+ */
+function modeTwo() {
+    randomiseColoredBalls();  // Randomizes the positions of the color balls.
+    randomisePoolballs();     // Randomizes the positions of the pool balls.
+}
+
+/**
+ * Resets the color balls to their initial positions and randomizes the positions of the pool balls.
+ * This mode keeps the pool balls randomized but ensures color balls are placed back to the start.
+ */
+function modeThree() {
+    resetColorballs();   // Resets the color balls to their initial positions.
+    randomisePoolballs(); // Randomizes the positions of the pool balls.
+}
+
+
+
+/**
+ * Draws a polygon by connecting the provided vertices in the order they are given.
+ * The vertices are assumed to be in an array of p5.js `createVector` objects.
+ * 
+ * @param {Array} vertices - An array of `createVector` objects representing the points of the polygon.
+ */
+function drawVertices(vertices) {
+    // Start drawing the shape
+    beginShape();
+    
+    // Loop through the vertices array to plot each vertex
+    for (var i = 0; i < vertices.length; i++) {
+        // Define each vertex point
+        vertex(vertices[i].x, vertices[i].y);
+    }
+    
+    // Close the shape and connect the last point to the first
+    endShape(CLOSE);
+}
+
+
+/**
+ * Draws an indicator line from the cue ball towards the mouse position,
+ * representing the direction and strength of the upcoming shot.
+ */
+function drawShotIndicator() {
+    push();
+    
+    // Set stroke weight for the line to be drawn
+    strokeWeight(5);
+    
+    // Calculate the direction vector from the cue ball to the mouse position
+    const directionVector = createVector(cueBall.position.x - mouseX, cueBall.position.y - mouseY);
+    
+    // Calculate the endpoint of the line (second line end) based on the direction vector
+    const secondLineEndX = cueBall.position.x + directionVector.x;
+    const secondLineEndY = cueBall.position.y + directionVector.y;
+    
+    // Set stroke weight and color for the final shot indicator line
+    strokeWeight(2);  // Reduces stroke weight for the actual line
+    stroke(255);      // Set color to white for the line
+    
+    // Draw the line from the cue ball to the calculated endpoint
+    line(cueBall.position.x, cueBall.position.y, secondLineEndX, secondLineEndY);
+    
+    pop();
+}
+
+/**
+ * Detects collisions between the cue ball and various objects in the pool game,
+ * including pool balls, color balls, and cushion walls.
+ * The function checks for collisions using the Matter.js physics engine.
+ * 
+ * For each object type, it logs the index of the object with which the cue ball collides.
+ */
+function collisionDetection() {
+    // Check collisions between cue ball and pool balls
+    for (var i = 0; i < poolBalls.length; i++) {
+        // Check if the cue ball collides with the current pool ball
+        var collisionWithPoolBall = Matter.Query.collides(cueBall, [poolBalls[i].body]);
+        if (collisionWithPoolBall.length > 0) {
+            console.log("Collided with pool ball at index " + i);
+        }
+    }
+
+    // Check collisions between cue ball and color balls
+    for (var i = 0; i < colorballs.length; i++) {
+        // Check if the cue ball collides with the current color ball
+        var collisionWithColorBall = Matter.Query.collides(cueBall, [colorballs[i].body]);
+        if (collisionWithColorBall.length > 0) {
+            console.log("Collided with color ball at index " + i);
+        }
+    }
+
+    // Check collisions between cue ball and cushion walls
+    for (var i = 0; i < cushionWalls.length; i++) {
+        // Check if the cue ball collides with the current cushion wall
+        var collisionWithCushionWall = Matter.Query.collides(cueBall, [cushionWalls[i]]);
+        if (collisionWithCushionWall.length > 0) {
+            console.log("Collided with cushion wall at index " + i);
+        }
+    }
+}
+
+/**
+ * Displays a "Game Over" message at the center of the screen and stops the game music.
+ * This function is called when the game ends.
+ */
+function gameOver() {
+    push();
+    
+    // Set the text properties for the "Game Over" message
+    textSize(36);  // Set the text size to 36 pixels
+    fill("red");   // Set the text color to red
+    stroke("yellow");  // Set the stroke (outline) color to yellow
+
+    // Display the "Game Over" message at the center of the screen
+    text("Game Over", width / 2 - 100, height / 2);
+
+    gameMusic.stop();
+    
+    pop();
+}
+
+/**
+ * Stops the specified sound from playing.
+ * 
+ * @param {p5.SoundFile} sound - The sound object to be stopped.
+ * This function can be used to stop any sound, such as background music or sound effects.
+ */
+function stopMusic(sound) {
+    sound.stop();  
+}
+
+
+//table.js
+// Variables to define the table and balls properties
+var tableWidth, tableHeight, ballDiameter, pocketSize;
+var tableWalls = []; // Array to store table wall bodies
+var cushionWalls = []; // Array to store cushion wall bodies
+var holes; // Array to store pocket hole positions
+
+/**
+ * Function to calculate the table size based on a fixed width.
+ * It sets the global variables for the table's dimensions and ball size.
+ *
+ * @description
+ * - `tableWidth` is set to a fixed value of 600.
+ * - `tableHeight` is set to half the table width, ensuring a 2:1 aspect ratio.
+ * - `ballDiameter` is calculated as one-thirty-sixth of the table width.
+ * - `pocketSize` is set to 1.5 times the ball diameter to define the size of the pockets.
+ */
+function calculateTablesize() {
+  // Set the table width to a fixed value
+  tableWidth = 600;
+
+  // Set the table height to half of the table width for a 2:1 aspect ratio
+  tableHeight = tableWidth / 2;
+
+  // Calculate the ball diameter as one-thirty-sixth of the table width
+  ballDiameter = tableWidth / 36;
+
+  // Set the pocket size to 1.5 times the ball diameter
+  pocketSize = 1.5 * ballDiameter;
+}
+
+/**
+ * Constructor function to create a table wall.
+ * This function creates a rectangular body using Matter.js and adds it to the world.
+ *
+ * @param {number} x - The x-coordinate of the center of the wall.
+ * @param {number} y - The y-coordinate of the center of the wall.
+ * @param {number} w - The width of the wall.
+ * @param {number} h - The height of the wall.
+ * @param {Object} options - Matter.js body options (e.g., density, friction, etc.).
+ *
+ * @description
+ * - Creates a rectangular body representing the wall and adds it to the physics world.
+ */
+function tableWall(x, y, w, h, options) {
+  // Create the rectangular body for the table wall
+  this.body = Bodies.rectangle(x, y, w, h, options);
+
+  // Add the wall body to the Matter.js world
+  World.add(engine.world, this.body);
+}
+/**
+ * Function to setup the table with walls, cushion walls, and other elements.
+ *
+ * @description
+ * - This function creates the table's boundary walls and adds them to the world.
+ * - It also creates the cushion walls (trapezoidal shapes) for the table's sides.
+ * - The walls and cushion walls are then added to the `World` in the Matter.js physics engine.
+ */
+function setupTable() {
+  var options = { isStatic: true }; // Options for static bodies (non-moving)
+
+  // Create the 4 walls of the table (left, right, top, bottom)
+  var wall1 = new tableWall(
+    width / 2 - tableWidth / 4,
+    height / 2 - tableHeight / 2,
+    tableWidth / 2 - 25,
+    tableHeight / 18,
+    options
+  );
+  var wall2 = new tableWall(
+    width / 2 - tableWidth / 4,
+    height / 2 + tableHeight / 2,
+    tableWidth / 2 - 25,
+    tableHeight / 18,
+    options
+  );
+  var wall3 = new tableWall(
+    width / 2 - tableWidth / 2,
+    height / 2,
+    tableHeight / 18,
+    tableHeight - 25,
+    options
+  );
+  var wall4 = new tableWall(
+    width / 2 + tableWidth / 2,
+    height / 2,
+    tableHeight / 18,
+    tableHeight - 25,
+    options
+  );
+  var wall5 = new tableWall(
+    width / 2 + tableWidth / 4,
+    height / 2 - tableHeight / 2,
+    tableWidth / 2 - 25,
+    tableHeight / 18,
+    options
+  );
+  var wall6 = new tableWall(
+    width / 2 + tableWidth / 4,
+    height / 2 + tableHeight / 2,
+    tableWidth / 2 - 25,
+    tableHeight / 18,
+    options
+  );
+
+  // Push all walls into the `tableWalls` array
+  tableWalls.push(wall1, wall2, wall3, wall4, wall5, wall6);
+
+  // Create trapezoidal cushion walls
+  var trapezoidOptions = { isStatic: true }; // Options for static trapezoid bodies
+
+  // Define the trapezoid shapes for the sides of the table
+  var trapezoid1 = Bodies.trapezoid(
+    width / 2 - tableWidth / 4.1,
+    height / 2 - tableHeight / 2.15,
+    tableWidth / 2 - 67,
+    tableHeight / 38,
+    -0.1,
+    trapezoidOptions
+  );
+  var trapezoid2 = Bodies.trapezoid(
+    width / 2 + tableWidth / 4.1,
+    height / 2 - tableHeight / 2.15,
+    tableWidth / 2 - 67,
+    tableHeight / 38,
+    -0.1,
+    trapezoidOptions
+  );
+  var trapezoid3 = Bodies.trapezoid(
+    width / 2 - tableWidth / 4.1,
+    height / 2 + tableHeight / 2.15,
+    tableWidth / 2 - 47,
+    tableHeight / 38,
+    0.1,
+    trapezoidOptions
+  );
+  var trapezoid4 = Bodies.trapezoid(
+    width / 2 + tableWidth / 4.1,
+    height / 2 + tableHeight / 2.15,
+    tableWidth / 2 - 47,
+    tableHeight / 38,
+    0.1,
+    trapezoidOptions
+  );
+
+  // Define the custom vertices for the other two trapezoidal cushions (for corners)
+  trapezoid5Vertices = [
+    { x: width / 2 + tableWidth / 2.05, y: height / 2 - tableHeight / 2.35 },
+    { x: width / 2 + tableWidth / 2, y: height / 2 - tableHeight / 2.6 },
+    { x: width / 2 + tableWidth / 2, y: height / 2 + tableHeight / 2.6 },
+    { x: width / 2 + tableWidth / 2.05, y: height / 2 + tableHeight / 2.35 },
+  ];
+
+  trapezoid6Vertices = [
+    { x: width / 2 - tableWidth / 2.05, y: height / 2 - tableHeight / 2.35 },
+    { x: width / 2 - tableWidth / 2, y: height / 2 - tableHeight / 2.6 },
+    { x: width / 2 - tableWidth / 2, y: height / 2 + tableHeight / 2.6 },
+    { x: width / 2 - tableWidth / 2.05, y: height / 2 + tableHeight / 2.35 },
+  ];
+
+  // Create the trapezoidal shapes using custom vertices
+  var trapezoid5 = Bodies.fromVertices(
+    width / 2 - tableWidth / 2.09,
+    height / 2,
+    trapezoid5Vertices,
+    trapezoidOptions
+  );
+  var trapezoid6 = Bodies.fromVertices(
+    width / 2 + tableWidth / 2.09,
+    height / 2,
+    trapezoid6Vertices,
+    trapezoidOptions
+  );
+
+  // Push all cushion walls into the `cushionWalls` array
+  cushionWalls.push(
+    trapezoid1,
+    trapezoid2,
+    trapezoid3,
+    trapezoid4,
+    trapezoid5,
+    trapezoid6
+  );
+
+  // Add all the cushion walls to the Matter.js world
+  World.add(engine.world, cushionWalls);
+}
+
+/**
+ * Function to draw the table, including the cushion, walls, pockets, arcs, and lines.
+ *
+ * @description
+ * - This function uses the p5.js library to draw the entire table layout with its walls, cushions, pockets, and other design elements.
+ * - The table's surface, walls, cushion bumpers, and pockets are drawn based on predefined dimensions and positions.
+ * - The function also draws an arc and lines on the table for a more realistic design.
+ */
+function drawTable() {
+  push(); // Begin drawing group (to isolate transformations)
+
+  fill("#1E5128"); // Green color for the table cushion
+  rect(
+    width / 2 - tableWidth / 2,
+    height / 2 - tableHeight / 2,
+    tableWidth,
+    tableHeight
+  ); // Draw the rectangular cushion
+
+  fill("#3D0000"); // Dark red color for the table walls
+  // Loop through tableWalls array and draw each wall's vertices
+  for (var i = 0; i < tableWalls.length; i++) {
+    drawVertices(tableWalls[i].body.vertices); // Custom function to draw vertices
+  }
+
+  fill("#142116"); // Dark green color for the cushion bumpers
+  // Loop through cushionWalls array and draw each cushion's vertices
+  for (var i = 0; i < cushionWalls.length; i++) {
+    drawVertices(cushionWalls[i].vertices); // Custom function to draw vertices
+  }
+
+  fill("#FFFF00"); // Yellow color for the pocket borders
+  rectMode(CENTER); // Set rectangle mode to center for the pockets
+  // Draw rectangles to represent the pocket borders
+  rect(width / 2 + tableWidth / 2, height / 2 + tableHeight / 2, 30, 25);
+  rect(width / 2 + tableWidth / 2, height / 2 - tableHeight / 2, 25, 25);
+  rect(width / 2, height / 2 + tableHeight / 2, 25, 25);
+  rect(width / 2, height / 2 - tableHeight / 2, 25, 25);
+  rect(width / 2 - tableWidth / 2, height / 2 + tableHeight / 2, 25, 25);
+  rect(width / 2 - tableWidth / 2, height / 2 - tableHeight / 2, 25, 25);
+
+  stroke(255); // Set the stroke color to white for lines and arcs
+  noFill(); // No fill for the arc
+  // Draw a vertical line from top to bottom of the table
+  line(
+    width / 2 - tableWidth / 4,
+    height / 2 - tableHeight / 2.2,
+    width / 2 - tableWidth / 4,
+    height / 2 + tableHeight / 2.2
+  );
+  angleMode(DEGREES); // Set angle mode to degrees for the arc
+  // Draw an arc at the left edge of the table
+  arc(width / 2 - tableWidth / 4, height / 2, 120, 120, 90, 270);
+  noStroke(); // Remove stroke after drawing arc and line
+
+  pop(); // End the drawing group (revert transformations)
+
+  // Loop through all the pockets (holes) and draw them using a custom function
+  for (var i = 0; i < holes.length; i++) {
+    pocket(holes[i].x, holes[i].y, pocketSize); // Custom function to draw pockets
+  }
+}
+
+/**
+ * Function to draw a pocket (hole) on the pool table.
+ *
+ * @param {number} x - The x-coordinate for the center of the pocket.
+ * @param {number} y - The y-coordinate for the center of the pocket.
+ * @param {number} pocketSize - The diameter (or size) of the pocket.
+ */
+function pocket(x, y, pocketSize) {
+  fill(0); // Set the pocket color to black
+  ellipse(x, y, pocketSize); // Draw the pocket as an ellipse at the given coordinates (x, y) with the specified size
+}
+
+/**
+ * Function to set up the positions of the pockets on the pool table.
+ *
+ * This function defines the locations of the six pockets on the table. The pockets are placed at the edges
+ * and corners of the table, and their coordinates are stored in the `holes` array.
+ */
+function setupPocket() {
+  // Define the positions for each of the 6 pockets on the pool table
+  holes = [
+    { x: width / 2, y: height / 2 + tableHeight / 2 - 5 }, // Bottom center pocket
+    { x: width / 2 + tableWidth / 2 - 5, y: height / 2 + tableHeight / 2 - 5 }, // Bottom-right pocket
+    { x: width / 2 - tableWidth / 2 + 5, y: height / 2 + tableHeight / 2 - 5 }, // Bottom-left pocket
+    { x: width / 2, y: height / 2 - tableHeight / 2 + 5 }, // Top center pocket
+    { x: width / 2 - tableWidth / 2 + 5, y: height / 2 - tableHeight / 2 + 5 }, // Top-left pocket
+    { x: width / 2 + tableWidth / 2 - 5, y: height / 2 - tableHeight / 2 + 5 }, // Top-right pocket
+  ];
+}
+
+//cue.js
+
+var cueStickAnimationFrame = 0; // Keeps track of the animation frame for the cue stick
+var cueStickDrawn = false; // A flag to track if the cue stick is drawn
+var cueStickLength = 20; // The length of the cue stick (can be adjusted)
+
+/**
+ * Draws the cue stick in the game.
+ *
+ * This function draws the cue stick based on the position of the cue ball and the mouse.
+ * The cue stick's body and handle are drawn, and it is positioned according to the mouse's position relative to the cue ball.
+ *
+ * The cue stick consists of:
+ * - A **body** of fixed length (200 units)
+ * - A **handle** of fixed length (100 units)
+ *
+ * The cue stick points in the direction from the cue ball to the mouse position, with the body and handle aligned in that direction.
+ *
+ * @returns {void} This function does not return anything, it directly updates the canvas by drawing the cue stick.
+ */
+function drawCueStick() {
+  push();
+  const fixedBodyLength = 200; // Length of the cue stick's body part
+  const fixedHandleLength = 100; // Length of the cue stick's handle part
+
+  // Calculate the direction vector from the cue ball to the mouse position
+  const directionVector = Matter.Vector.normalise(
+    Matter.Vector.create(
+      cueBall.position.x - mouseX,
+      cueBall.position.y - mouseY
+    )
+  );
+
+  // Calculate the endpoint of the cue stick's body based on the direction
+  const cueStickEndX = cueBall.position.x - cueStickLength * directionVector.x;
+  const cueStickEndY = cueBall.position.y - cueStickLength * directionVector.y;
+
+  // Calculate the body end (where the body part connects to the handle)
+  const bodyEnd = Matter.Vector.create(
+    cueStickEndX - fixedBodyLength * directionVector.x,
+    cueStickEndY - fixedBodyLength * directionVector.y
+  );
+
+  // Calculate the handle end (where the cue stick handle ends)
+  const handleEnd = Matter.Vector.create(
+    bodyEnd.x - fixedHandleLength * directionVector.x,
+    bodyEnd.y - fixedHandleLength * directionVector.y
+  );
+
+  // Draw the cue stick: body part in white and handle part in brown
+  strokeWeight(5);
+  stroke(255); // White for the body
+  line(cueStickEndX, cueStickEndY, bodyEnd.x, bodyEnd.y); // Draw body part
+  stroke("#C87941"); // Brown for the handle
+  line(bodyEnd.x, bodyEnd.y, handleEnd.x, handleEnd.y); // Draw handle part
+  pop();
+}
+
+/**
+ * Function to animate the cue stick lengthening effect.
+ * This function gradually increases the length of the cue stick over a specified number of frames.
+ * It uses a recursive `setTimeout` call to simulate a smooth animation over time.
+ */
+function animateCueStick() {
+  // Reset the cue stick length to its initial value of 20
+  cueStickLength = 20;
+
+  // Reset the animation frame counter to start from 0
+  cueStickAnimationFrame = 0;
+
+  // Set the flag to indicate that the cue stick is being drawn/animated
+  cueStickDrawn = true;
+
+  // Total number of frames the animation will last
+  const animationFrames = 60;
+
+  /**
+   * Recursive function that animates the cue stick's lengthening.
+   * It increases the length of the cue stick by a small amount on each frame.
+   */
+  function animate() {
+    // Increment the animation frame counter
+    cueStickAnimationFrame++;
+
+    // If the current frame is within the specified range, continue animating
+    if (cueStickAnimationFrame <= animationFrames) {
+      // Increase the cue stick length slightly on each frame
+      cueStickLength += 0.5;
+
+      // Call the animate function again after 30ms for the next frame
+      setTimeout(animate, 30);
+    } else {
+      // Once the animation is complete, stop drawing the cue stick
+      cueStickDrawn = false;
+    }
+  }
+
+  // Start the animation
+  animate();
+}
+
+
+
+//main.js
+var cueStickAnimationFrame = 0; // Keeps track of the animation frame for the cue stick
+var cueStickDrawn = false; // A flag to track if the cue stick is drawn
+var cueStickLength = 20; // The length of the cue stick (can be adjusted)
+
+/**
+ * Draws the cue stick in the game.
+ *
+ * This function draws the cue stick based on the position of the cue ball and the mouse.
+ * The cue stick's body and handle are drawn, and it is positioned according to the mouse's position relative to the cue ball.
+ *
+ * The cue stick consists of:
+ * - A **body** of fixed length (200 units)
+ * - A **handle** of fixed length (100 units)
+ *
+ * The cue stick points in the direction from the cue ball to the mouse position, with the body and handle aligned in that direction.
+ *
+ * @returns {void} This function does not return anything, it directly updates the canvas by drawing the cue stick.
+ */
+function drawCueStick() {
+  push();
+  const fixedBodyLength = 200; // Length of the cue stick's body part
+  const fixedHandleLength = 100; // Length of the cue stick's handle part
+
+  // Calculate the direction vector from the cue ball to the mouse position
+  const directionVector = Matter.Vector.normalise(
+    Matter.Vector.create(
+      cueBall.position.x - mouseX,
+      cueBall.position.y - mouseY
+    )
+  );
+
+  // Calculate the endpoint of the cue stick's body based on the direction
+  const cueStickEndX = cueBall.position.x - cueStickLength * directionVector.x;
+  const cueStickEndY = cueBall.position.y - cueStickLength * directionVector.y;
+
+  // Calculate the body end (where the body part connects to the handle)
+  const bodyEnd = Matter.Vector.create(
+    cueStickEndX - fixedBodyLength * directionVector.x,
+    cueStickEndY - fixedBodyLength * directionVector.y
+  );
+
+  // Calculate the handle end (where the cue stick handle ends)
+  const handleEnd = Matter.Vector.create(
+    bodyEnd.x - fixedHandleLength * directionVector.x,
+    bodyEnd.y - fixedHandleLength * directionVector.y
+  );
+
+  // Draw the cue stick: body part in white and handle part in brown
+  strokeWeight(5);
+  stroke(255); // White for the body
+  line(cueStickEndX, cueStickEndY, bodyEnd.x, bodyEnd.y); // Draw body part
+  stroke("#C87941"); // Brown for the handle
+  line(bodyEnd.x, bodyEnd.y, handleEnd.x, handleEnd.y); // Draw handle part
+  pop();
+}
+
+/**
+ * Function to animate the cue stick lengthening effect.
+ * This function gradually increases the length of the cue stick over a specified number of frames.
+ * It uses a recursive `setTimeout` call to simulate a smooth animation over time.
+ */
+function animateCueStick() {
+  // Reset the cue stick length to its initial value of 20
+  cueStickLength = 20;
+
+  // Reset the animation frame counter to start from 0
+  cueStickAnimationFrame = 0;
+
+  // Set the flag to indicate that the cue stick is being drawn/animated
+  cueStickDrawn = true;
+
+  // Total number of frames the animation will last
+  const animationFrames = 60;
+
+  /**
+   * Recursive function that animates the cue stick's lengthening.
+   * It increases the length of the cue stick by a small amount on each frame.
+   */
+  function animate() {
+    // Increment the animation frame counter
+    cueStickAnimationFrame++;
+
+    // If the current frame is within the specified range, continue animating
+    if (cueStickAnimationFrame <= animationFrames) {
+      // Increase the cue stick length slightly on each frame
+      cueStickLength += 0.5;
+
+      // Call the animate function again after 30ms for the next frame
+      setTimeout(animate, 30);
+    } else {
+      // Once the animation is complete, stop drawing the cue stick
+      cueStickDrawn = false;
+    }
+  }
+
+  // Start the animation
+  animate();
+}

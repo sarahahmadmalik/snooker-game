@@ -8,8 +8,7 @@ This project is a snooker game simulation built using JavaScript, p5.js, and Mat
 - Usage
 - Game Features
 - File Structure
-- Contributing
-- License
+- Description of Key Files
 
 ## Installation
 

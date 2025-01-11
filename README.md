@@ -8,7 +8,7 @@ This project is a snooker game simulation built using JavaScript, p5.js, and Mat
 - Usage
 - Game Features
 - File Structure
-- Description of Key Files
+- Description of Files
 
 ## Installation
 
@@ -68,7 +68,7 @@ This project is a snooker game simulation built using JavaScript, p5.js, and Mat
         └── table.js
     ```
 
-### Description of Key Files
+### Description of Files
 
 - **index.html**: The main HTML file that includes all the necessary scripts and styles.
 - **arena.js**: Contains functions to initialize and draw the snooker game world.
